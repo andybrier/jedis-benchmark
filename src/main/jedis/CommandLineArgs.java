@@ -36,5 +36,8 @@ public class CommandLineArgs
 
     @Parameter(names = "-m", description = "size of mset or mget")
     public Integer mSize = 100;
+    
+    @Parameter(names = "-f", description = "setget or set or get")
+    public String flag = "setget";
 
 }
