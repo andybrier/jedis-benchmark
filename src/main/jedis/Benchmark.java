@@ -2,6 +2,7 @@ package jedis;
 
 import com.beust.jcommander.JCommander;
 import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.time.StopWatch;
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
@@ -69,6 +70,8 @@ public class Benchmark
         public void run() {
             Jedis jedis = pool.getResource();
 
+            long start = System.currentTimeMillis();
+
             for(int i = 0; i < noOps_; i++) {
 
                 String msetArgs[] = new String[msize * 2];
@@ -80,12 +83,19 @@ public class Benchmark
                     j = j + 2;
                 }
 
-                long startTime = System.nanoTime();
-                jedis.mset(msetArgs);
-                setRunTimes.offer(System.nanoTime() - startTime);
+                StopWatch watch = StopWatch.createStarted();
+                String result = jedis.mset(msetArgs);
+                watch.stop();
+                setRunTimes.offer(watch.getTime(TimeUnit.MICROSECONDS));
                 setLatch.countDown();
             }
+
             pool.returnResource(jedis);
+
+            long taken = System.currentTimeMillis() - start;
+            long qps =  noOps_ / ( taken / 1000);
+            double avg_rt = (double)taken / (double)noOps_;
+            System.out.println("Finish MSET, TotalCount: " + noOps_ + ", TotalCost(ms): " + taken + " , QPS(r/s): " + qps + ", AVG RT(ms):" + avg_rt ) ;
         }
     }
 
@@ -100,77 +110,81 @@ public class Benchmark
 
         public void run() {
 
+            long start = System.currentTimeMillis();
+            Jedis jedis = pool.getResource();
 
             for(int j = 0; j < noOps_; j++) {
-                long startTime = System.nanoTime();
 
-                Jedis jedis = pool.getResource();
                 String mgetArgs[] = new String[msize];
                 for (int i = 0; i < msize; i++) {
                     String key = String.valueOf(new Random().nextInt(r));
                     mgetArgs[i] = key;
                 }
-                jedis.mget(mgetArgs);
-                getRunTimes.offer(System.nanoTime() - startTime);
-                getLatch.countDown();
 
-                pool.returnResource(jedis);
+                StopWatch watch = StopWatch.createStarted();
+                List<String> result = jedis.mget(mgetArgs);
+                watch.stop();
+                getRunTimes.offer(watch.getTime(TimeUnit.MICROSECONDS));
+                getLatch.countDown();
             }
 
-         }
+            pool.returnResource(jedis);
+
+            long taken = System.currentTimeMillis() - start;
+            long qps =  noOps_ / ( taken / 1000);
+            double avg_rt = (double)taken / (double)noOps_;
+            System.out.println("Finish MGET, TotalCount: " + noOps_ + ", TotalCost(ms): " + taken + " , QPS(r/s): " + qps + ", AVG RT(ms):" + avg_rt ) ;
+
+        }
     }
 
 
-    public void performBenchmark() throws InterruptedException
+    public void performBenchmark(String flag) throws InterruptedException
     {
 
-        long start = System.nanoTime();
-        Executor executor = Executors.newFixedThreadPool(noThreads);
-        for (int i = 0; i < noThreads; i++) {
-           int cnt = noOps_ / noThreads;
-           new MSetThread("set thread").start();
+        if(flag.equals("setget") || flag.equals("set")) {
+            System.out.println("-------------- mset -----------------");
+            StopWatch watch = StopWatch.createStarted();
+            for (int i = 0; i < noThreads; i++) {
+                new MSetThread("set thread").start();
+            }
+            setLatch.await();
+            watch.stop();
+            printStats(watch.getTime(TimeUnit.MILLISECONDS), setRunTimes);
         }
-        setLatch.await();
-        long totalNanoRunTime = System.nanoTime() - start;
-        System.out.println("-------------- mset -----------------");
-        printStats(totalNanoRunTime, setRunTimes);
 
+        if(flag.equals("setget") || flag.equals("get")) {
+            System.out.println("-------------- mget -----------------");
 
-        start = System.nanoTime();
-        for (int i = 0; i < noThreads; i++) {
-            int cnt = noOps_ / noThreads;
-            new MGetThread("get thread").start();
+            StopWatch watch = StopWatch.createStarted();
+            for (int i = 0; i < noThreads; i++) {
+                new MGetThread("get thread").start();
+            }
+            getLatch.await();
+            watch.stop();
+            printStats(watch.getTime(TimeUnit.MILLISECONDS), getRunTimes);
         }
-        getLatch.await();
-        totalNanoRunTime = System.nanoTime() - start;
-        System.out.println("-------------- mget -----------------");
-        printStats(totalNanoRunTime, getRunTimes);
     }
 
 
-    public void printStats(long totalNanoRunTime, LinkedBlockingQueue<Long>  record)
+    public void printStats(long taken, LinkedBlockingQueue<Long>  record)
     {
         List<Long> points = new ArrayList<Long>();
         record.drainTo(points);
         Collections.sort(points);
-        long sum = 0;
-        for (Long l : points)
-        {
-            sum += l;
-        }
 
         System.out.println("Data size :" + dataSize);
         System.out.println("Total Request : " + points.size());
-        System.out.println("Time Test Run for (ms) : " + TimeUnit.NANOSECONDS.toMillis(totalNanoRunTime));
-        double avg = (double)TimeUnit.NANOSECONDS.toMillis(totalNanoRunTime) / (double)points.size();
-        System.out.println("Average(ms): " + avg);
-        System.out.println("50 % <=" + TimeUnit.NANOSECONDS.toMillis(points.get((points.size() / 2) - 1)));
-        System.out.println("90 % <=" + TimeUnit.NANOSECONDS.toMillis(points.get((points.size() * 90 / 100) - 1)));
-        System.out.println("95 % <=" + TimeUnit.NANOSECONDS.toMillis(points.get((points.size() * 95 / 100) - 1)));
-        System.out.println("99 % <=" + TimeUnit.NANOSECONDS.toMillis(points.get((points.size() * 99 / 100) - 1)));
-        System.out.println("99.9 % <=" + TimeUnit.NANOSECONDS.toMillis(points.get((points.size() * 999 / 1000) - 1)));
-        System.out.println("100 % <=" + TimeUnit.NANOSECONDS.toMillis(points.get(points.size() - 1)));
-        System.out.println((points.size() * 1000 / TimeUnit.NANOSECONDS.toMillis(totalNanoRunTime)) + " Operations per second");
+        System.out.println("QPS(r/s) : " + 1000 * points.size() / taken);
+        System.out.println("Total Thread : " + noThreads);
+        System.out.println("P99 ms: " +  (double)percentile(points, 99) / 1000.0d);
+        System.out.println("P99.5 ms: " +  (double)percentile(points, 99.5) / 1000.0d);
+        System.out.println("P99.9 ms:" +  (double)percentile(points, 99.9) / 1000.0d);
+    }
+
+    public static long percentile(List<Long> latencies, double percentile) {
+        int index = (int) Math.ceil(percentile / 100.0 * latencies.size());
+        return latencies.get(index-1);
     }
 
     public static void main(String[] args) throws InterruptedException
@@ -183,7 +197,7 @@ public class Benchmark
                 .parse(args);
 
         Benchmark benchmark = new Benchmark(cla.random, cla.noOps, cla.noConnections, cla.host, cla.port, cla.dataSize, cla.password, cla.mSize);
-        benchmark.performBenchmark();
+        benchmark.performBenchmark(cla.flag);
     }
 
 
